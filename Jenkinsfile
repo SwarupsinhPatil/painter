@@ -1,14 +1,13 @@
 pipeline {
-    agent any
+    agent { label 'k3s' }
 
     environment {
-        IMAGE_NAME = "swarupsinh10/painter"
-        DOCKER_CRED = "dockerhub-cred"
+        DOCKER_IMAGE = "swarupsinh10/painter:latest"
     }
 
     stages {
 
-        stage('Clone Code') {
+        stage('Clone Repository') {
             steps {
                 git branch: 'main', url: 'https://github.com/SwarupsinhPatil/painter.git'
             }
@@ -16,38 +15,36 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t $IMAGE_NAME:latest .'
+                sh 'docker build -t $DOCKER_IMAGE .'
             }
         }
 
-        stage('Docker Login') {
+        stage('Push Image to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: DOCKER_CRED, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     sh 'echo $PASS | docker login -u $USER --password-stdin'
+                    sh 'docker push $DOCKER_IMAGE'
                 }
-            }
-        }
-
-        stage('Push Image') {
-            steps {
-                sh 'docker push $IMAGE_NAME:latest'
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
                 sh '''
-                  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-                  kubectl create deployment painter --image=swarupsinh10/painter:latest --replicas=3 --dry-run=client -o yaml | kubectl apply -f -
-                  kubectl expose deployment painter --type=NodePort --port=80 --dry-run=client -o yaml | kubectl apply -f -
-                  '''
+                kubectl delete deployment painter --ignore-not-found
+                kubectl delete service painter --ignore-not-found
+                kubectl create deployment painter --image=$DOCKER_IMAGE
+                kubectl expose deployment painter --type=NodePort --port=80
+                '''
             }
         }
 
-        stage('Cleanup') {
+        stage('Check Deployment') {
             steps {
-                sh 'docker system prune -f'
+                sh 'kubectl get pods'
+                sh 'kubectl get svc'
             }
         }
+
     }
 }
